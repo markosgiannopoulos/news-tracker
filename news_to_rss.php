@@ -635,6 +635,33 @@ function emit_rss_item(string $headline, string $bodyHtml, string $category, ?st
 	flush_now();
 }
 
+// --------------- JSON Output ---------------
+
+function emit_json_header(string $feedTitle, string $feedLink): void {
+	$header = [
+		'feed_title' => $feedTitle,
+		'feed_link' => $feedLink,
+		'items' => null,
+	];
+	// Manually stream: open object, write items array start
+	echo '{';
+	echo '"feed_title":' . json_encode($header['feed_title'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . ',';
+	echo '"feed_link":' . json_encode($header['feed_link'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . ',';
+	echo '"items":[';
+	flush_now();
+}
+
+function emit_json_item(bool $isFirst, array $item): void {
+	if (!$isFirst) { echo ','; }
+	echo json_encode($item, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+	flush_now();
+}
+
+function emit_json_footer(): void {
+	echo ']}';
+	flush_now();
+}
+
 // --------------- Main ---------------
 
 function main(array $argv): void {
@@ -651,7 +678,7 @@ function main(array $argv): void {
 	}
 	@ob_implicit_flush(true);
 	if (php_sapi_name() !== 'cli') {
-		header('Content-Type: application/rss+xml; charset=utf-8');
+		header('Content-Type: application/json; charset=utf-8');
 	}
 
 	$feedTitle = 'AI-Synthesized Topic Feed';
@@ -666,13 +693,14 @@ function main(array $argv): void {
 		$top = array_slice($items, 0, MAX_ITEMS * 2); // keep extra in case generation fails
 	} catch (Throwable $e) {
 		stderr('Failed to fetch topic: ' . $e->getMessage());
-		echo '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Error</title><description>' . xml_escape($e->getMessage()) . '</description></channel></rss>';
+		echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 		return;
 	}
 
-	emit_rss_header($feedTitle, $feedLink);
+	emit_json_header($feedTitle, $feedLink);
 
 	$emitted = 0;
+	$isFirst = true;
 	foreach ($top as $item) {
 		if ($emitted >= MAX_ITEMS) { break; }
 		$title = $item['title'];
@@ -697,7 +725,16 @@ function main(array $argv): void {
 			$img = find_relevant_image($imgQuery);
 			$mediaUrl = $img['url'] ?? null;
 
-			emit_rss_item($headline, $bodyHtml, $category, $mediaUrl, $link);
+			$payload = [
+				'guid' => sha1($headline . '|' . $link),
+				'title' => $headline,
+				'link' => $link,
+				'category' => $category,
+				'body_html' => $bodyHtml,
+				'media_url' => $mediaUrl,
+			];
+			emit_json_item($isFirst, $payload);
+			$isFirst = false;
 			$emitted++;
 		} catch (Throwable $e) {
 			stderr('Generation failed for: ' . $title . ' — ' . $e->getMessage());
@@ -705,7 +742,7 @@ function main(array $argv): void {
 		}
 	}
 
-	emit_rss_footer();
+	emit_json_footer();
 }
 
 // Entry
